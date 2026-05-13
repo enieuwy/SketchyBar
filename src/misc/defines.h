@@ -44,6 +44,7 @@
 #define SUB_DOMAIN_SHADOW                      "shadow"
 #define SUB_DOMAIN_IMAGE                       "image"
 #define SUB_DOMAIN_BADGE                       "badge"
+#define SUB_DOMAIN_MARKER                      "marker"
 #define SUB_DOMAIN_KNOB                        "knob"
 #define SUB_DOMAIN_SLIDER                      "slider"
 #define SUB_DOMAIN_FONT                        "font"
