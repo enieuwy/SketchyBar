@@ -69,10 +69,10 @@ static void text_prepare_line(struct text* text) {
 
   text->line.line = CTLineCreateWithAttributedString(attr_string);
 
-  CTLineGetTypographicBounds(text->line.line,
-                             &text->line.ascent,
-                             &text->line.descent,
-                             NULL                );
+  text->advance = CTLineGetTypographicBounds(text->line.line,
+                                             &text->line.ascent,
+                                             &text->line.descent,
+                                             NULL                );
 
   text->bounds = CTLineGetBoundsWithOptions(text->line.line,
                                             kCTLineBoundsUseGlyphPathBounds);
@@ -101,6 +101,14 @@ static void badge_destroy_line(struct badge* badge) {
   badge->line.line = NULL;
 }
 
+static void badge_reset_line_geometry(struct badge* badge) {
+  badge->line.ascent = 0;
+  badge->line.descent = 0;
+  badge->bounds = CGRectZero;
+  badge->width = 0.f;
+  badge->advance = 0.f;
+}
+
 static void badge_prepare_line(struct badge* badge) {
   const void *keys[] = { kCTFontAttributeName,
                          kCTForegroundColorFromContextAttributeName };
@@ -126,10 +134,7 @@ static void badge_prepare_line(struct badge* badge) {
                                           kCFStringEncodingUTF8             );
 
   if (!string) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     CFRelease(attributes);
     return;
   }
@@ -139,10 +144,7 @@ static void badge_prepare_line(struct badge* badge) {
                                                                attributes);
 
   if (!attr_string) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     if (string) CFRelease(string);
     CFRelease(attributes);
     return;
@@ -151,20 +153,17 @@ static void badge_prepare_line(struct badge* badge) {
   badge->line.line = CTLineCreateWithAttributedString(attr_string);
 
   if (!badge->line.line) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     CFRelease(string);
     CFRelease(attr_string);
     CFRelease(attributes);
     return;
   }
 
-  CTLineGetTypographicBounds(badge->line.line,
-                             &badge->line.ascent,
-                             &badge->line.descent,
-                             NULL                );
+  badge->advance = CTLineGetTypographicBounds(badge->line.line,
+                                              &badge->line.ascent,
+                                              &badge->line.descent,
+                                              NULL                );
 
   badge->bounds = CTLineGetBoundsWithOptions(badge->line.line,
                                              kCTLineBoundsUseGlyphPathBounds);
@@ -212,6 +211,18 @@ static bool badge_set_xoffset(struct badge* badge, int offset) {
 static bool badge_set_yoffset(struct badge* badge, int offset) {
   if (badge->y_offset == offset) return false;
   badge->y_offset = offset;
+  return true;
+}
+
+static bool badge_set_text_xoffset(struct badge* badge, int offset) {
+  if (badge->text_x_offset == offset) return false;
+  badge->text_x_offset = offset;
+  return true;
+}
+
+static bool badge_set_text_yoffset(struct badge* badge, int offset) {
+  if (badge->text_y_offset == offset) return false;
+  badge->text_y_offset = offset;
   return true;
 }
 
@@ -296,16 +307,20 @@ static bool badge_parse_anchor(struct token token, enum badge_anchor* anchor) {
   return false;
 }
 
-static void badge_init(struct badge* badge) {
+void badge_init(struct badge* badge) {
   memset(badge, 0, sizeof(struct badge));
 
   badge->drawing = false;
   badge->has_const_width = false;
+  badge->advance_centering = false;
   badge->align = POSITION_CENTER;
   badge->x_offset = 0;
   badge->y_offset = 0;
+  badge->text_x_offset = 0;
+  badge->text_y_offset = 0;
   badge->custom_width = 0;
   badge->width = 0.f;
+  badge->advance = 0.f;
   badge->anchor = BADGE_ANCHOR_BOTTOM_RIGHT;
 
   font_init(&badge->font);
@@ -316,20 +331,24 @@ static void badge_init(struct badge* badge) {
   badge_set_string(badge, string_copy(""), true);
 }
 
-static void badge_clear_pointers(struct badge* badge) {
+void badge_clear_pointers(struct badge* badge) {
   badge->string = NULL;
   badge->line.line = NULL;
   font_clear_pointers(&badge->font);
   background_clear_pointers(&badge->background);
 }
 
-static void badge_copy(struct badge* badge, struct badge* source) {
+void badge_copy(struct badge* badge, struct badge* source) {
   badge->drawing = source->drawing;
   badge->has_const_width = source->has_const_width;
+  badge->advance_centering = source->advance_centering;
   badge->align = source->align;
   badge->x_offset = source->x_offset;
   badge->y_offset = source->y_offset;
+  badge->text_x_offset = source->text_x_offset;
+  badge->text_y_offset = source->text_y_offset;
   badge->custom_width = source->custom_width;
+  badge->advance = source->advance;
   badge->anchor = source->anchor;
 
   font_set_family(&badge->font, string_copy(source->font.family), true);
@@ -342,7 +361,7 @@ static void badge_copy(struct badge* badge, struct badge* source) {
   image_copy(&badge->background.image, source->background.image.image_ref);
 }
 
-static void badge_calculate_bounds(struct badge* badge, CGRect parent) {
+void badge_calculate_bounds(struct badge* badge, CGRect parent) {
   if (!badge->drawing) return;
 
   uint32_t box_width = badge_get_box_width(badge);
@@ -394,28 +413,38 @@ static void badge_calculate_bounds(struct badge* badge, CGRect parent) {
   box.origin.x += badge->x_offset;
   box.origin.y += badge->y_offset;
 
-  if (badge->align == POSITION_CENTER && badge->has_const_width)
+  if (badge->advance_centering) {
+    if (badge->align == POSITION_CENTER && badge->has_const_width)
+      badge->bounds.origin.x = CGRectGetMidX(box) - badge->advance / 2.f;
+    else if (badge->align == POSITION_RIGHT && badge->has_const_width)
+      badge->bounds.origin.x = CGRectGetMaxX(box) - badge->advance;
+    else
+      badge->bounds.origin.x = box.origin.x;
+  } else if (badge->align == POSITION_CENTER && badge->has_const_width) {
     badge->bounds.origin.x = box.origin.x
                              + (CGFloat)((int)box_width - (int)text_width) / 2.f;
-  else if (badge->align == POSITION_RIGHT && badge->has_const_width)
+  } else if (badge->align == POSITION_RIGHT && badge->has_const_width) {
     badge->bounds.origin.x = box.origin.x
                              + (int)box_width - (int)text_width;
-  else
+  } else {
     badge->bounds.origin.x = box.origin.x;
+  }
+  badge->bounds.origin.x += badge->text_x_offset;
 
   badge->bounds.origin.y = CGRectGetMidY(box)
                            - ((badge->line.ascent
                                - badge->line.descent) / 2);
+  badge->bounds.origin.y += badge->text_y_offset;
 
   if (badge->background.enabled)
     background_calculate_bounds(&badge->background,
-                                CGRectGetMidX(box),
+                                box.origin.x,
                                 CGRectGetMidY(box),
                                 box.size.width,
                                 box.size.height);
 }
 
-static void badge_draw(struct badge* badge, CGContextRef context) {
+void badge_draw(struct badge* badge, CGContextRef context) {
   if (!badge->drawing) return;
   if (badge->font.font_changed)
     badge_set_string(badge, badge->string, true);
@@ -436,7 +465,7 @@ static void badge_draw(struct badge* badge, CGContextRef context) {
   CGContextRestoreGState(context);
 }
 
-static void badge_destroy(struct badge* badge) {
+void badge_destroy(struct badge* badge) {
   background_destroy(&badge->background);
   font_destroy(&badge->font);
 
@@ -445,7 +474,7 @@ static void badge_destroy(struct badge* badge) {
   badge_clear_pointers(badge);
 }
 
-static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
+void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
   char align[32] = { 0 };
   switch (badge->align) {
     case POSITION_LEFT:
@@ -471,6 +500,10 @@ static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
                "%s\"width\": %d,\n"
                "%s\"align\": \"%s\",\n"
                "%s\"anchor\": \"%s\",\n"
+               "%s\"text\": {\n"
+               "%s\t\"x_offset\": %d,\n"
+               "%s\t\"y_offset\": %d\n"
+               "%s},\n"
                "%s\"background\": {\n",
                indent, badge->string,
                indent, format_bool(badge->drawing),
@@ -481,6 +514,10 @@ static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
                indent, badge->has_const_width ? badge->custom_width : -1,
                indent, align,
                indent, badge_anchor_to_string(badge->anchor),
+               indent,
+               indent, badge->text_x_offset,
+               indent, badge->text_y_offset,
+               indent,
                indent);
 
   char deeper_indent[strlen(indent) + 2];
@@ -489,7 +526,7 @@ static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
   fprintf(rsp, "\n%s}", indent);
 }
 
-static bool badge_parse_sub_domain(struct badge* badge, FILE* rsp, struct token property, char* message) {
+bool badge_parse_sub_domain(struct badge* badge, FILE* rsp, struct token property, char* message) {
   bool needs_refresh = false;
   if (token_equals(property, PROPERTY_STRING)) {
     return badge_set_string(badge, token_to_string(get_token(&message)), false);
@@ -551,6 +588,28 @@ static bool badge_parse_sub_domain(struct badge* badge, FILE* rsp, struct token 
         return font_parse_sub_domain(&badge->font, rsp, entry, message);
       else if (token_equals(subdom, SUB_DOMAIN_COLOR))
         return color_parse_sub_domain(&badge->color, rsp, entry, message);
+      else if (token_equals(subdom, SUB_DOMAIN_TEXT)
+               || token_equals(subdom, SUB_DOMAIN_GLYPH)) {
+        if (token_equals(entry, PROPERTY_XOFFSET)) {
+          struct token token = get_token(&message);
+          ANIMATE(badge_set_text_xoffset,
+                  badge,
+                  badge->text_x_offset,
+                  token_to_int(token));
+        }
+        else if (token_equals(entry, PROPERTY_YOFFSET)) {
+          struct token token = get_token(&message);
+          ANIMATE(badge_set_text_yoffset,
+                  badge,
+                  badge->text_y_offset,
+                  token_to_int(token));
+        }
+        else {
+          respond(rsp, "[!] Badge: Invalid %s property '%s'\n",
+                  subdom.text,
+                  entry.text  );
+        }
+      }
       else if (token_equals(subdom, SUB_DOMAIN_BACKGROUND))
         return background_parse_sub_domain(&badge->background, rsp, entry, message);
       else
@@ -586,6 +645,7 @@ bool text_set_string(struct text* text, char* string, bool forced) {
 }
 
 void text_copy(struct text* text, struct text* source) {
+  text->advance_centering = source->advance_centering;
   font_set_family(&text->font, string_copy(source->font.family), true);
   font_set_style(&text->font, string_copy(source->font.style), true);
   font_set_size(&text->font, source->font.size);
@@ -602,6 +662,7 @@ void text_init(struct text* text) {
   text->drawing = true;
   text->highlight = false;
   text->has_const_width = false;
+  text->advance_centering = false;
   text->custom_width = 0;
   text->padding_left = 0;
   text->padding_right = 0;
@@ -611,6 +672,9 @@ void text_init(struct text* text) {
   text->align = POSITION_LEFT;
   text->scroll = 0.f;
   text->scroll_duration = 100;
+  text->width = 0.f;
+  text->advance = 0.f;
+  text->bounds = CGRectZero;
 
   shadow_init(&text->shadow);
   background_init(&text->background);
@@ -718,14 +782,26 @@ void text_destroy(struct text* text) {
 }
 
 static void text_calculate_bounds_at(struct text* text, float x, float y) {
-  if (text->align == POSITION_CENTER && text->has_const_width)
+  if (text->advance_centering) {
+    if (text->align == POSITION_CENTER && text->has_const_width)
+      text->bounds.origin.x = x + text->x_offset
+                              + text->custom_width / 2.f
+                              - text->advance / 2.f;
+    else if (text->align == POSITION_RIGHT && text->has_const_width)
+      text->bounds.origin.x = x + text->x_offset
+                              + (int)text->custom_width
+                              - text->advance;
+    else
+      text->bounds.origin.x = x + text->x_offset;
+  } else if (text->align == POSITION_CENTER && text->has_const_width) {
     text->bounds.origin.x = x + text->x_offset + ((int)text->custom_width
                                  - (int)text_get_length(text, true)) / 2.f;
-  else if (text->align == POSITION_RIGHT && text->has_const_width)
+  } else if (text->align == POSITION_RIGHT && text->has_const_width) {
     text->bounds.origin.x = x + text->x_offset + (int)text->custom_width
                             - (int)text_get_length(text, true);
-  else
+  } else {
     text->bounds.origin.x = x + text->x_offset;
+  }
 
   text->bounds.origin.y = y - ((text->line.ascent
                                 - text->line.descent) / 2);
