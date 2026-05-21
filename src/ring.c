@@ -149,125 +149,205 @@ static struct bar_item* ring_get_owner(struct ring* ring) {
   return NULL;
 }
 
-static bool ring_has_layer_windows(struct ring* ring) {
+// True iff every realized window for this ring has a layer tree attached.
+// When any realized window lacks a tree (chrome forced a fallback, marker
+// configuration disqualified the layer path, ...) the legacy renderer must
+// service the entire item to keep multi-display rings consistent.
+static bool ring_use_layer_path(struct ring* ring) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
+  bool has_window = false;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (ring_layer_window_has_tree(window)) return true;
+    if (!window) continue;
+    has_window = true;
+    if (!ring_layer_window_has_tree(window)) return false;
   }
-
-  return false;
+  return has_window;
 }
 
+// Each per-property helper visits every realized window and returns true
+// iff every realized window was updated through the layer path. Callers are
+// expected to have gated with ring_use_layer_path() first, so a false here
+// signals a partial failure -- needs_refresh stays true to drive the legacy
+// redraw for the surviving fallback windows.
 static bool ring_update_layer_windows(struct ring* ring) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_update(ring, window, true);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window) || !ring_layer_update(ring, window, true))
+      ok = false;
   }
-
-  return updated;
+  return any && ok;
 }
 
 static bool ring_set_layer_window_values(struct ring* ring, float value) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_set_value(ring, window, value);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window) || !ring_layer_set_value(ring, window, value))
+      ok = false;
   }
-
-  return updated;
+  return any && ok;
 }
 
 static bool ring_animate_layer_window_values(struct ring* ring, float value) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_animate_value(ring,
-                                        window,
-                                        value,
-                                        g_bar_manager.animator.duration,
-                                        g_bar_manager.animator.interp_function);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window)
+        || !ring_layer_animate_value(ring,
+                                     window,
+                                     value,
+                                     g_bar_manager.animator.duration,
+                                     g_bar_manager.animator.interp_function)) {
+      ok = false;
+    }
   }
-
-  return updated;
+  return any && ok;
 }
 
 static bool ring_update_layer_window_colors(struct ring* ring, bool track) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_set_color(ring, window, track);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window) || !ring_layer_set_color(ring, window, track))
+      ok = false;
   }
-
-  return updated;
+  return any && ok;
 }
 
 static bool ring_animate_layer_window_colors(struct ring* ring, bool track) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_animate_color(ring,
-                                        window,
-                                        track,
-                                        g_bar_manager.animator.duration,
-                                        g_bar_manager.animator.interp_function);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window)
+        || !ring_layer_animate_color(ring,
+                                     window,
+                                     track,
+                                     g_bar_manager.animator.duration,
+                                     g_bar_manager.animator.interp_function)) {
+      ok = false;
+    }
   }
-
-  return updated;
+  return any && ok;
 }
 
 static bool ring_update_layer_window_line_widths(struct ring* ring) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
 
-  bool updated = false;
+  bool any = false;
+  bool ok = true;
   for (int i = 0; i < bar_item->num_windows; i++) {
     struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_set_line_width(ring, window);
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window) || !ring_layer_set_line_width(ring, window))
+      ok = false;
   }
-
-  return updated;
+  return any && ok;
 }
 
-static bool ring_animate_layer_window_line_widths(struct ring* ring) {
-  struct bar_item* bar_item = ring_get_owner(ring);
-  if (!bar_item) return false;
+// animator_cancel_locked only removes animations whose owner already locked
+// them after the previous message batch. That matches what we want here --
+// stale frame-driven animations from earlier messages would otherwise keep
+// mutating ring->value / colors / line width while CA owns presentation.
+// animator_cancel would also fire the animation's final value back into the
+// model, overwriting whatever we just set; avoid it on the layer path.
+static void ring_cancel_legacy_value_animations(struct ring* ring) {
+  animator_cancel_locked(&g_bar_manager.animator,
+                         (void*)ring,
+                         (bool (*)(void*, int))&ring_set_value);
+}
 
-  bool updated = false;
-  for (int i = 0; i < bar_item->num_windows; i++) {
-    struct window* window = bar_item->windows[i];
-    if (!ring_layer_window_has_tree(window)) continue;
-    updated |= ring_layer_animate_line_width(ring,
-                                             window,
-                                             g_bar_manager.animator.duration,
-                                             g_bar_manager.animator.interp_function);
+static void ring_cancel_legacy_color_animations(struct ring* ring, bool track) {
+  animator_cancel_locked(&g_bar_manager.animator,
+                         (void*)ring,
+                         (bool (*)(void*, int))(track ? &ring_set_track_color
+                                                      : &ring_set_color));
+
+  // Component subdomain animations target the color struct, not the ring.
+  struct color* color = track ? &ring->track_color : &ring->color;
+  animator_cancel_locked(&g_bar_manager.animator, (void*)color,
+                         (bool (*)(void*, int))&color_set_hex);
+  animator_cancel_locked(&g_bar_manager.animator, (void*)color,
+                         (bool (*)(void*, int))&color_set_alpha);
+  animator_cancel_locked(&g_bar_manager.animator, (void*)color,
+                         (bool (*)(void*, int))&color_set_r);
+  animator_cancel_locked(&g_bar_manager.animator, (void*)color,
+                         (bool (*)(void*, int))&color_set_g);
+  animator_cancel_locked(&g_bar_manager.animator, (void*)color,
+                         (bool (*)(void*, int))&color_set_b);
+}
+
+static void ring_cancel_legacy_line_width_animations(struct ring* ring) {
+  animator_cancel_locked(&g_bar_manager.animator,
+                         (void*)ring,
+                         (bool (*)(void*, int))&ring_set_line_width);
+}
+
+static bool ring_parse_layer_color_subdomain(struct ring* ring,
+                                              bool track,
+                                              FILE* rsp,
+                                              struct token property,
+                                              char* message) {
+  struct color* color = track ? &ring->track_color : &ring->color;
+  bool changed = false;
+
+  if (token_equals(property, PROPERTY_COLOR_HEX)) {
+    changed = color_set_hex(color, token_to_int(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_COLOR_ALPHA)) {
+    changed = color_set_alpha(color, token_to_float(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_COLOR_RED)) {
+    changed = color_set_r(color, token_to_float(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_COLOR_GREEN)) {
+    changed = color_set_g(color, token_to_float(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_COLOR_BLUE)) {
+    changed = color_set_b(color, token_to_float(get_token(&message)));
+  } else {
+    respond(rsp, "[?] Color: Invalid property '%s'\n", property.text);
+    return false;
   }
 
-  return updated;
+  if (!changed) return false;
+
+  ring_cancel_legacy_color_animations(ring, track);
+  bool updated = g_bar_manager.animator.duration > 0
+                 ? ring_animate_layer_window_colors(ring, track)
+                 : ring_update_layer_window_colors(ring, track);
+  return !updated;
 }
 
 void ring_init(struct ring* ring) {
@@ -471,11 +551,11 @@ void ring_destroy(struct ring* ring) {
 
 bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, char* message) {
   bool needs_refresh = false;
-
   if (token_equals(property, PROPERTY_VALUE)) {
     float value = ring_clamp_value(token_to_float(get_token(&message)));
-    if (ring_has_layer_windows(ring)) {
+    if (ring_use_layer_path(ring)) {
       bool changed = ring_set_value(ring, value);
+      ring_cancel_legacy_value_animations(ring);
       if (changed) {
         bool updated = g_bar_manager.animator.duration > 0
                        ? ring_animate_layer_window_values(ring, value)
@@ -491,8 +571,9 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
   }
   else if (token_equals(property, PROPERTY_PERCENTAGE)) {
     float value = ring_clamp_value(token_to_float(get_token(&message)) / 100.f);
-    if (ring_has_layer_windows(ring)) {
+    if (ring_use_layer_path(ring)) {
       bool changed = ring_set_value(ring, value);
+      ring_cancel_legacy_value_animations(ring);
       if (changed) {
         bool updated = g_bar_manager.animator.duration > 0
                        ? ring_animate_layer_window_values(ring, value)
@@ -509,8 +590,9 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
   else if (token_equals(property, PROPERTY_COLOR)) {
     struct token token = get_token(&message);
     uint32_t color = token_to_uint32t(token);
-    if (ring_has_layer_windows(ring)) {
+    if (ring_use_layer_path(ring)) {
       bool changed = ring_set_color(ring, color);
+      ring_cancel_legacy_color_animations(ring, false);
       if (changed) {
         bool updated = g_bar_manager.animator.duration > 0
                        ? ring_animate_layer_window_colors(ring, false)
@@ -527,8 +609,9 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
   else if (token_equals(property, PROPERTY_TRACK_COLOR)) {
     struct token token = get_token(&message);
     uint32_t color = token_to_uint32t(token);
-    if (ring_has_layer_windows(ring)) {
+    if (ring_use_layer_path(ring)) {
       bool changed = ring_set_track_color(ring, color);
+      ring_cancel_legacy_color_animations(ring, true);
       if (changed) {
         bool updated = g_bar_manager.animator.duration > 0
                        ? ring_animate_layer_window_colors(ring, true)
@@ -547,12 +630,14 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
     float line_width = token_to_float(token);
     if (line_width <= 0.f) {
       respond(rsp, "[!] Ring: Invalid line_width '%s'\n", token.text);
-    } else if (ring_has_layer_windows(ring)) {
+    } else if (ring_use_layer_path(ring)) {
+      // Layer-backed rings update line width without CA interpolation: the
+      // path radius depends on line width, so animating only lineWidth would
+      // pop the arc centerline against the freshly regenerated path.
       bool changed = ring_set_line_width(ring, line_width);
+      ring_cancel_legacy_line_width_animations(ring);
       if (changed) {
-        bool updated = g_bar_manager.animator.duration > 0
-                       ? ring_animate_layer_window_line_widths(ring)
-                       : ring_update_layer_window_line_widths(ring);
+        bool updated = ring_update_layer_window_line_widths(ring);
         needs_refresh = !updated;
       }
     } else {
@@ -567,7 +652,7 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
     int width = token_to_int(token);
     if (width <= 0) {
       respond(rsp, "[!] Ring: Invalid width '%s'\n", token.text);
-    } else if (ring_has_layer_windows(ring)) {
+    } else if (ring_use_layer_path(ring)) {
       needs_refresh = ring_set_width(ring, width);
     } else {
       ANIMATE(ring_set_width,
@@ -613,9 +698,13 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
       struct token subdom = { key_value_pair.key, strlen(key_value_pair.key) };
       struct token entry = { key_value_pair.value, strlen(key_value_pair.value) };
       if (token_equals(subdom, SUB_DOMAIN_COLOR)) {
+        if (ring_use_layer_path(ring))
+          return ring_parse_layer_color_subdomain(ring, false, rsp, entry, message);
         return color_parse_sub_domain(&ring->color, rsp, entry, message);
       }
       else if (token_equals(subdom, PROPERTY_TRACK_COLOR)) {
+        if (ring_use_layer_path(ring))
+          return ring_parse_layer_color_subdomain(ring, true, rsp, entry, message);
         return color_parse_sub_domain(&ring->track_color, rsp, entry, message);
       }
       else if (token_equals(subdom, SUB_DOMAIN_MARKER)) {

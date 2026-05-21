@@ -196,8 +196,17 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
         || bar_item->update_mask & UPDATE_MOUSE_EXITED) {
       window_assign_mouse_tracking_area(window, window->frame);
     }
-    if (bar_item->has_ring)
-      ring_layer_update(&bar_item->ring, window, true);
+    if (bar_item->has_ring) {
+      if (bar_item_ring_chrome_visible(bar_item)) {
+        // Item background/icon/label/badge draw into the underlying CGContext
+        // surface (surface 0). The CA-backed ring surface is ordered above it,
+        // so keeping a ring layer tree here would hide the user's chrome. Tear
+        // it down and let the legacy CG renderer draw the full item.
+        ring_layer_window_destroy(window);
+      } else {
+        ring_layer_update(&bar_item->ring, window, true);
+      }
+    }
 
 
     windows_freeze();

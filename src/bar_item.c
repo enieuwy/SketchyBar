@@ -869,6 +869,44 @@ void bar_item_draw(struct bar_item* bar_item, struct window* window) {
   text_draw_badge(&bar_item->label, context);
 }
 
+static bool background_has_visible_paint(struct background* bg) {
+  if (!bg->enabled) return false;
+  if (bg->color.a > 0.f) return true;
+  if (bg->border_color.a > 0.f && bg->border_width > 0) return true;
+  if (bg->shadow.enabled) return true;
+  if (bg->image.enabled) return true;
+  return false;
+}
+
+static bool text_has_visible_paint(struct text* text) {
+  if (!text->drawing) return false;
+  if (text->string && text->string[0] != '\0') return true;
+  if (background_has_visible_paint(&text->background)) return true;
+  return false;
+}
+
+static bool badge_has_visible_paint(struct badge* badge) {
+  if (!badge->drawing) return false;
+  if (badge->string && badge->string[0] != '\0') return true;
+  if (background_has_visible_paint(&badge->background)) return true;
+  return false;
+}
+
+// True when a ring item carries non-ring chrome that would be hidden behind
+// the CA-backed ring surface. text_draw / background_draw paint into the
+// underlying CGContext surface; ring_layer composes its sublayers on a
+// separate surface ordered above. When chrome is visible we tear the layer
+// host down and let bar_item_draw render the whole item the legacy way.
+bool bar_item_ring_chrome_visible(struct bar_item* bar_item) {
+  if (!bar_item || !bar_item->has_ring) return false;
+  if (background_has_visible_paint(&bar_item->background)) return true;
+  if (text_has_visible_paint(&bar_item->icon)) return true;
+  if (text_has_visible_paint(&bar_item->label)) return true;
+  if (badge_has_visible_paint(&bar_item->icon.badge)) return true;
+  if (badge_has_visible_paint(&bar_item->label.badge)) return true;
+  return false;
+}
+
 void bar_item_change_space(struct bar_item* bar_item, uint64_t dsid, uint32_t adid) {
   if (bar_item->num_windows >= adid && bar_item->windows[adid - 1]) {
     window_send_to_space(bar_item->windows[adid - 1], dsid);

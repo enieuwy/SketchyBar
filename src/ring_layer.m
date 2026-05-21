@@ -25,6 +25,7 @@ struct ring_layer_tree {
   CAShapeLayer* track;
   CAShapeLayer* progress;
   CAShapeLayer* marker_background;
+  CALayer* marker_clip;
   CATextLayer* marker;
   CAShapeLayer* marker_badge_background;
   CATextLayer* marker_badge;
@@ -133,6 +134,11 @@ static void add_basic_animation(CALayer* layer,
   [layer addAnimation:animation forKey:key_path];
 }
 
+static void cancel_layer_animation(CALayer* layer, NSString* key) {
+  if (!layer || !key) return;
+  [layer removeAnimationForKey:key];
+}
+
 static CGPathRef ring_path_create(struct ring* ring) {
   CGMutablePathRef path = CGPathCreateMutable();
 
@@ -198,7 +204,35 @@ static void configure_background_layer(CAShapeLayer* layer, struct background* b
   }
 }
 
-static void configure_text_layer(CATextLayer* layer, struct text* text) {
+static CGPoint configure_marker_clip_layer(CALayer* layer,
+                                           struct text* text,
+                                           CGRect layer_frame) {
+  if (!text->drawing) {
+    layer.hidden = YES;
+    layer.masksToBounds = NO;
+    layer.frame = layer_frame;
+    return CGPointZero;
+  }
+
+  layer.hidden = NO;
+  layer.contentsScale = layer_scale;
+  if (text->max_chars > 0) {
+    CGRect clip = layer_frame;
+    clip.origin.x = text->bounds.origin.x + text->padding_left;
+    clip.size.width = text->width;
+    layer.frame = clip;
+    layer.masksToBounds = YES;
+    return clip.origin;
+  }
+
+  layer.frame = layer_frame;
+  layer.masksToBounds = NO;
+  return CGPointZero;
+}
+
+static void configure_text_layer(CATextLayer* layer,
+                                 struct text* text,
+                                 CGPoint container_origin) {
   if (!text->drawing || !text->string || !text->line.line) {
     layer.hidden = YES;
     return;
@@ -225,8 +259,14 @@ static void configure_text_layer(CATextLayer* layer, struct text* text) {
   CGFloat height = text->line.ascent + text->line.descent;
   if (height < text->bounds.size.height) height = text->bounds.size.height;
 
-  layer.frame = CGRectMake(text->bounds.origin.x + text->padding_left - text->scroll,
-                           text->bounds.origin.y + text->y_offset - text->line.descent,
+  layer.frame = CGRectMake(text->bounds.origin.x
+                           + text->padding_left
+                           - text->scroll
+                           - container_origin.x,
+                           text->bounds.origin.y
+                           + text->y_offset
+                           - text->line.descent
+                           - container_origin.y,
                            width,
                            height);
 }
@@ -301,11 +341,14 @@ static struct layer_host* layer_host_create(struct window* window) {
   }
 
   CGRect bounds = CGRectMake(0, 0, host->size.width, host->size.height);
+  // SLSBindSurface expects the window's current screen-space origin here.
+  // Passing zero binds the CA context successfully but composites the surface
+  // away from the item window on macOS 26.
   CGError error = SLSBindSurface(g_connection,
                                  window->id,
                                  host->surface_id,
-                                 0,
-                                 0,
+                                 (int)window->origin.x,
+                                 (int)window->origin.y,
                                  host->context.contextId);
   if (error != kCGErrorSuccess
       || SLSSetSurfaceBounds(g_connection,
@@ -353,7 +396,6 @@ static void layer_host_resize(struct window* window) {
 
   host->size = window->frame.size;
   CGRect bounds = CGRectMake(0, 0, host->size.width, host->size.height);
-
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   host->root.bounds = bounds;
@@ -368,6 +410,14 @@ static CAShapeLayer* shape_layer_create(CALayer* root) {
   CAShapeLayer* layer = [[CAShapeLayer layer] retain];
   layer.contentsScale = layer_scale;
   layer.fillColor = nil;
+  [root addSublayer:layer];
+  return layer;
+}
+
+static CALayer* container_layer_create(CALayer* root) {
+  CALayer* layer = [[CALayer layer] retain];
+  layer.contentsScale = layer_scale;
+  layer.masksToBounds = NO;
   [root addSublayer:layer];
   return layer;
 }
@@ -391,7 +441,8 @@ static struct ring_layer_tree* ring_layer_tree_create(struct window* window) {
   tree->track = shape_layer_create(root);
   tree->progress = shape_layer_create(root);
   tree->marker_background = shape_layer_create(root);
-  tree->marker = text_layer_create(root);
+  tree->marker_clip = container_layer_create(root);
+  tree->marker = text_layer_create(tree->marker_clip);
   tree->marker_badge_background = shape_layer_create(root);
   tree->marker_badge = text_layer_create(root);
   tree->badge_background = shape_layer_create(root);
@@ -407,6 +458,7 @@ static void ring_layer_tree_destroy(struct ring_layer_tree* tree) {
   [tree->progress removeFromSuperlayer];
   [tree->marker_background removeFromSuperlayer];
   [tree->marker removeFromSuperlayer];
+  [tree->marker_clip removeFromSuperlayer];
   [tree->marker_badge_background removeFromSuperlayer];
   [tree->marker_badge removeFromSuperlayer];
   [tree->badge_background removeFromSuperlayer];
@@ -416,6 +468,7 @@ static void ring_layer_tree_destroy(struct ring_layer_tree* tree) {
   [tree->progress release];
   [tree->marker_background release];
   [tree->marker release];
+  [tree->marker_clip release];
   [tree->marker_badge_background release];
   [tree->marker_badge release];
   [tree->badge_background release];
@@ -514,6 +567,7 @@ bool ring_layer_update(struct ring* ring, struct window* window, bool disable_ac
   tree->track.frame = layer_frame;
   tree->progress.frame = layer_frame;
   tree->marker_background.frame = layer_frame;
+  tree->marker_clip.frame = layer_frame;
   tree->marker_badge_background.frame = layer_frame;
   tree->badge_background.frame = layer_frame;
 
@@ -523,7 +577,10 @@ bool ring_layer_update(struct ring* ring, struct window* window, bool disable_ac
   ring_layer_configure_arcs(ring, tree);
 
   configure_background_layer(tree->marker_background, &ring->marker.background);
-  configure_text_layer(tree->marker, &ring->marker);
+  CGPoint marker_origin = configure_marker_clip_layer(tree->marker_clip,
+                                                     &ring->marker,
+                                                     layer_frame);
+  configure_text_layer(tree->marker, &ring->marker, marker_origin);
   configure_background_layer(tree->marker_badge_background,
                              &ring->marker.badge.background);
   configure_badge_text_layer(tree->marker_badge, &ring->marker.badge);
@@ -544,6 +601,7 @@ bool ring_layer_set_value(struct ring* ring, struct window* window, float value)
 
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
+  cancel_layer_animation(tree->progress, @"strokeEnd");
   tree->progress.strokeEnd = value;
   [CATransaction commit];
   [CATransaction flush];
@@ -584,6 +642,7 @@ bool ring_layer_set_color(struct ring* ring, struct window* window, bool track) 
   CGColorRef cg_color = color_create(color);
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
+  cancel_layer_animation(layer, @"strokeColor");
   layer.strokeColor = cg_color;
   layer.hidden = color->a <= 0.f;
   [CATransaction commit];
@@ -606,13 +665,16 @@ bool ring_layer_animate_color(struct ring* ring,
   CGColorRef cg_color = color_create(color);
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
+  // Keep the layer visible for the duration of the animation so a fade to
+  // alpha zero is actually visible — direct setters re-hide once the
+  // transition is over.
+  layer.hidden = NO;
   add_basic_animation(layer,
                       @"strokeColor",
                       (id)cg_color,
                       duration,
                       interp_function);
   layer.strokeColor = cg_color;
-  layer.hidden = color->a <= 0.f;
   [CATransaction commit];
   CGColorRelease(cg_color);
   [CATransaction flush];
@@ -622,37 +684,5 @@ bool ring_layer_animate_color(struct ring* ring,
 
 bool ring_layer_set_line_width(struct ring* ring, struct window* window) {
   if (!ring || !window || !ring_layer_window_has_tree(window)) return false;
-  return ring_layer_update(ring, window, true);
-}
-
-bool ring_layer_animate_line_width(struct ring* ring,
-                                   struct window* window,
-                                   uint32_t duration,
-                                   char interp_function) {
-  if (!ring || !window || !ring_layer_window_has_tree(window)) return false;
-  struct ring_layer_tree* tree = window->ring_layer;
-
-  CGFloat line_width = ring->line_width > 0.f
-                       ? min(ring->line_width, (float)ring->width)
-                       : 0.f;
-  NSNumber* target = [NSNumber numberWithFloat:line_width];
-
-  [CATransaction begin];
-  [CATransaction setDisableActions:YES];
-  add_basic_animation(tree->track,
-                      @"lineWidth",
-                      target,
-                      duration,
-                      interp_function);
-  add_basic_animation(tree->progress,
-                      @"lineWidth",
-                      target,
-                      duration,
-                      interp_function);
-  tree->track.lineWidth = line_width;
-  tree->progress.lineWidth = line_width;
-  [CATransaction commit];
-  [CATransaction flush];
-
   return ring_layer_update(ring, window, true);
 }

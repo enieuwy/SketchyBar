@@ -27,7 +27,3 @@ bool ring_layer_animate_color(struct ring* ring,
                               uint32_t duration,
                               char interp_function);
 bool ring_layer_set_line_width(struct ring* ring, struct window* window);
-bool ring_layer_animate_line_width(struct ring* ring,
-                                   struct window* window,
-                                   uint32_t duration,
-                                   char interp_function);
