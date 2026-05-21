@@ -8,6 +8,7 @@
 
 bool ring_layer_window_attach(struct window* window);
 void ring_layer_window_resize(struct window* window);
+void ring_layer_window_move(struct window* window);
 void ring_layer_window_destroy(struct window* window);
 
 bool ring_layer_window_has_tree(struct window* window);
@@ -21,6 +22,7 @@ bool ring_layer_animate_value(struct ring* ring,
                               uint32_t duration,
                               char interp_function);
 bool ring_layer_set_color(struct ring* ring, struct window* window, bool track);
+bool ring_layer_sync_color(struct ring* ring, struct window* window, bool track);
 bool ring_layer_animate_color(struct ring* ring,
                               struct window* window,
                               bool track,

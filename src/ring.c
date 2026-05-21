@@ -242,6 +242,22 @@ static bool ring_update_layer_window_colors(struct ring* ring, bool track) {
   return any && ok;
 }
 
+static bool ring_sync_layer_window_colors(struct ring* ring, bool track) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool any = false;
+  bool ok = true;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!window) continue;
+    any = true;
+    if (!ring_layer_window_has_tree(window) || !ring_layer_sync_color(ring, window, track))
+      ok = false;
+  }
+  return any && ok;
+}
+
 static bool ring_animate_layer_window_colors(struct ring* ring, bool track) {
   struct bar_item* bar_item = ring_get_owner(ring);
   if (!bar_item) return false;
@@ -341,9 +357,13 @@ static bool ring_parse_layer_color_subdomain(struct ring* ring,
     return false;
   }
 
-  if (!changed) return false;
-
   ring_cancel_legacy_color_animations(ring, track);
+
+  if (!changed) {
+    bool updated = ring_sync_layer_window_colors(ring, track);
+    return !updated;
+  }
+
   bool updated = g_bar_manager.animator.duration > 0
                  ? ring_animate_layer_window_colors(ring, track)
                  : ring_update_layer_window_colors(ring, track);

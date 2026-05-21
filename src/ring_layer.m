@@ -58,6 +58,44 @@ static void layer_host_flush(struct window* window) {
                   0);
 }
 
+static bool layer_host_uses_screen_origin(void) {
+  if (__builtin_available(macOS 26.0, *)) return true;
+  return false;
+}
+
+static void layer_host_bind_origin(struct window* window, int* x, int* y) {
+  *x = 0;
+  *y = 0;
+
+  if (!layer_host_uses_screen_origin()) return;
+  *x = (int)window->origin.x;
+  *y = (int)window->origin.y;
+}
+
+static CGError layer_host_bind_surface(struct window* window,
+                                      struct layer_host* host) {
+  int x = 0;
+  int y = 0;
+  layer_host_bind_origin(window, &x, &y);
+
+  return SLSBindSurface(g_connection,
+                        window->id,
+                        host->surface_id,
+                        x,
+                        y,
+                        host->context.contextId);
+}
+
+static bool layer_host_rebind_surface_for_origin(struct window* window) {
+  if (!window || !window->layer_host) return false;
+  if (!layer_host_uses_screen_origin()) return true;
+  return layer_host_bind_surface(window, window->layer_host) == kCGErrorSuccess;
+}
+
+static bool ring_layer_arc_drawable(struct ring* ring) {
+  return ring->enabled && ring->width > 0 && ring->line_width > 0.f;
+}
+
 static CGColorRef color_create(struct color* color) {
   CGFloat components[4] = { color->r, color->g, color->b, color->a };
   CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
@@ -341,15 +379,10 @@ static struct layer_host* layer_host_create(struct window* window) {
   }
 
   CGRect bounds = CGRectMake(0, 0, host->size.width, host->size.height);
-  // SLSBindSurface expects the window's current screen-space origin here.
-  // Passing zero binds the CA context successfully but composites the surface
-  // away from the item window on macOS 26.
-  CGError error = SLSBindSurface(g_connection,
-                                 window->id,
-                                 host->surface_id,
-                                 (int)window->origin.x,
-                                 (int)window->origin.y,
-                                 host->context.contextId);
+  // macOS 26 binds the CA context using screen-space coordinates. Older
+  // releases use the historical window-relative zero origin, matching the
+  // SLSSetWindowShape split in window_apply_frame().
+  CGError error = layer_host_bind_surface(window, host);
   if (error != kCGErrorSuccess
       || SLSSetSurfaceBounds(g_connection,
                              window->id,
@@ -403,6 +436,7 @@ static void layer_host_resize(struct window* window) {
   [CATransaction commit];
 
   SLSSetSurfaceBounds(g_connection, window->id, host->surface_id, bounds);
+  layer_host_rebind_surface_for_origin(window);
   SLSFlushSurface(g_connection, window->id, host->surface_id, 0);
 }
 
@@ -488,6 +522,13 @@ bool ring_layer_window_attach(struct window* window) {
 void ring_layer_window_resize(struct window* window) {
   if (!window || !window->layer_host) return;
   layer_host_resize(window);
+}
+
+void ring_layer_window_move(struct window* window) {
+  if (!window || !window->layer_host) return;
+  if (!layer_host_uses_screen_origin()) return;
+  if (layer_host_rebind_surface_for_origin(window))
+    layer_host_flush(window);
 }
 
 void ring_layer_window_destroy_tree(struct window* window) {
@@ -644,7 +685,26 @@ bool ring_layer_set_color(struct ring* ring, struct window* window, bool track) 
   [CATransaction setDisableActions:YES];
   cancel_layer_animation(layer, @"strokeColor");
   layer.strokeColor = cg_color;
-  layer.hidden = color->a <= 0.f;
+  layer.hidden = !ring_layer_arc_drawable(ring) || color->a <= 0.f;
+  [CATransaction commit];
+  CGColorRelease(cg_color);
+  [CATransaction flush];
+  layer_host_flush(window);
+  return true;
+}
+
+bool ring_layer_sync_color(struct ring* ring, struct window* window, bool track) {
+  if (!ring || !window || !ring_layer_window_has_tree(window)) return false;
+  struct ring_layer_tree* tree = window->ring_layer;
+  CAShapeLayer* layer = track ? tree->track : tree->progress;
+  struct color* color = track ? &ring->track_color : &ring->color;
+
+  CGColorRef cg_color = color_create(color);
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  layer.strokeColor = cg_color;
+  if (![layer animationForKey:@"strokeColor"])
+    layer.hidden = !ring_layer_arc_drawable(ring) || color->a <= 0.f;
   [CATransaction commit];
   CGColorRelease(cg_color);
   [CATransaction flush];
@@ -663,17 +723,23 @@ bool ring_layer_animate_color(struct ring* ring,
   struct color* color = track ? &ring->track_color : &ring->color;
 
   CGColorRef cg_color = color_create(color);
+  bool drawable = ring_layer_arc_drawable(ring);
+
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
-  // Keep the layer visible for the duration of the animation so a fade to
-  // alpha zero is actually visible — direct setters re-hide once the
-  // transition is over.
-  layer.hidden = NO;
-  add_basic_animation(layer,
-                      @"strokeColor",
-                      (id)cg_color,
-                      duration,
-                      interp_function);
+  if (drawable) {
+    // Keep drawable arcs visible for the duration of the animation so a fade
+    // to alpha zero is actually visible.
+    layer.hidden = NO;
+    add_basic_animation(layer,
+                        @"strokeColor",
+                        (id)cg_color,
+                        duration,
+                        interp_function);
+  } else {
+    cancel_layer_animation(layer, @"strokeColor");
+    layer.hidden = YES;
+  }
   layer.strokeColor = cg_color;
   [CATransaction commit];
   CGColorRelease(cg_color);

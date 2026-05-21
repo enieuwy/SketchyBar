@@ -160,6 +160,7 @@ void window_move(struct window* window, CGPoint point) {
     CFRelease(array);
     CFRelease(number);
   }
+  ring_layer_window_move(window);
 }
 
 bool window_apply_frame(struct window* window, bool forced) {
