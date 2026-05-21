@@ -1,6 +1,14 @@
 #include "text.h"
 #include "bar_manager.h"
 
+static uint32_t ceil_positive_float_to_uint32(float value) {
+  if (!(value > 0.f)) return 0;
+  if (value >= (float)UINT32_MAX) return UINT32_MAX;
+
+  uint32_t integer = (uint32_t)value;
+  return value > (float)integer ? integer + 1 : integer;
+}
+
 static void text_calculate_truncated_width(struct text* text, CFDictionaryRef attributes) {
   if (text->max_chars > 0) {
     uint32_t len = strlen(text->string) + 4;
@@ -69,10 +77,10 @@ static void text_prepare_line(struct text* text) {
 
   text->line.line = CTLineCreateWithAttributedString(attr_string);
 
-  CTLineGetTypographicBounds(text->line.line,
-                             &text->line.ascent,
-                             &text->line.descent,
-                             NULL                );
+  text->advance = CTLineGetTypographicBounds(text->line.line,
+                                             &text->line.ascent,
+                                             &text->line.descent,
+                                             NULL                );
 
   text->bounds = CTLineGetBoundsWithOptions(text->line.line,
                                             kCTLineBoundsUseGlyphPathBounds);
@@ -101,6 +109,14 @@ static void badge_destroy_line(struct badge* badge) {
   badge->line.line = NULL;
 }
 
+static void badge_reset_line_geometry(struct badge* badge) {
+  badge->line.ascent = 0;
+  badge->line.descent = 0;
+  badge->bounds = CGRectZero;
+  badge->width = 0.f;
+  badge->advance = 0.f;
+}
+
 static void badge_prepare_line(struct badge* badge) {
   const void *keys[] = { kCTFontAttributeName,
                          kCTForegroundColorFromContextAttributeName };
@@ -126,10 +142,7 @@ static void badge_prepare_line(struct badge* badge) {
                                           kCFStringEncodingUTF8             );
 
   if (!string) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     CFRelease(attributes);
     return;
   }
@@ -139,10 +152,7 @@ static void badge_prepare_line(struct badge* badge) {
                                                                attributes);
 
   if (!attr_string) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     if (string) CFRelease(string);
     CFRelease(attributes);
     return;
@@ -151,20 +161,17 @@ static void badge_prepare_line(struct badge* badge) {
   badge->line.line = CTLineCreateWithAttributedString(attr_string);
 
   if (!badge->line.line) {
-    badge->line.ascent = 0;
-    badge->line.descent = 0;
-    badge->bounds = CGRectZero;
-    badge->width = 0.f;
+    badge_reset_line_geometry(badge);
     CFRelease(string);
     CFRelease(attr_string);
     CFRelease(attributes);
     return;
   }
 
-  CTLineGetTypographicBounds(badge->line.line,
-                             &badge->line.ascent,
-                             &badge->line.descent,
-                             NULL                );
+  badge->advance = CTLineGetTypographicBounds(badge->line.line,
+                                              &badge->line.ascent,
+                                              &badge->line.descent,
+                                              NULL                );
 
   badge->bounds = CTLineGetBoundsWithOptions(badge->line.line,
                                              kCTLineBoundsUseGlyphPathBounds);
@@ -194,7 +201,7 @@ static bool badge_set_string(struct badge* badge, char* string, bool forced) {
   badge_prepare_line(badge);
   return true;
 }
-static bool badge_set_value(struct badge* badge, char* string) {
+bool badge_set_value(struct badge* badge, char* string) {
   if (!string) return false;
 
   bool drawing = string[0] != '\0';
@@ -223,6 +230,7 @@ static bool badge_set_yoffset(struct badge* badge, int offset) {
   badge->y_offset = offset;
   return true;
 }
+
 static bool badge_set_text_xoffset(struct badge* badge, int offset) {
   if (badge->text_x_offset == offset) return false;
   badge->text_x_offset = offset;
@@ -234,7 +242,6 @@ static bool badge_set_text_yoffset(struct badge* badge, int offset) {
   badge->text_y_offset = offset;
   return true;
 }
-
 
 static bool badge_set_width(struct badge* badge, int width) {
   if (width < 0) {
@@ -255,22 +262,22 @@ static bool badge_set_anchor(struct badge* badge, enum badge_anchor anchor) {
   return true;
 }
 
-static uint32_t badge_get_text_width(struct badge* badge) {
+static CGFloat badge_get_text_width(struct badge* badge) {
   if (badge->font.font_changed)
     badge_set_string(badge, badge->string, true);
 
-  return badge->width < 0 ? 0 : (uint32_t)badge->width;
+  return badge->advance_centering ? badge->advance : badge->width;
 }
 
 static uint32_t badge_get_natural_box_width(struct badge* badge) {
-  uint32_t width = badge_get_text_width(badge);
+  CGFloat width = badge_get_text_width(badge);
   if (badge->background.enabled && badge->background.image.enabled) {
     CGSize image_size = image_get_size(&badge->background.image);
     if (image_size.width > width)
       width = image_size.width;
   }
 
-  return width;
+  return ceil_positive_float_to_uint32(width);
 }
 
 static uint32_t badge_get_box_width(struct badge* badge) {
@@ -327,11 +334,12 @@ static bool badge_parse_anchor(struct token token, enum badge_anchor* anchor) {
   return false;
 }
 
-static void badge_init(struct badge* badge) {
+void badge_init(struct badge* badge) {
   memset(badge, 0, sizeof(struct badge));
 
   badge->drawing = false;
   badge->has_const_width = false;
+  badge->advance_centering = false;
   badge->align = POSITION_CENTER;
   badge->x_offset = 0;
   badge->y_offset = 0;
@@ -339,6 +347,7 @@ static void badge_init(struct badge* badge) {
   badge->text_y_offset = 0;
   badge->custom_width = 0;
   badge->width = 0.f;
+  badge->advance = 0.f;
   badge->anchor = BADGE_ANCHOR_BOTTOM_RIGHT;
 
   font_init(&badge->font);
@@ -349,22 +358,24 @@ static void badge_init(struct badge* badge) {
   badge_set_string(badge, string_copy(""), true);
 }
 
-static void badge_clear_pointers(struct badge* badge) {
+void badge_clear_pointers(struct badge* badge) {
   badge->string = NULL;
   badge->line.line = NULL;
   font_clear_pointers(&badge->font);
   background_clear_pointers(&badge->background);
 }
 
-static void badge_copy(struct badge* badge, struct badge* source) {
+void badge_copy(struct badge* badge, struct badge* source) {
   badge->drawing = source->drawing;
   badge->has_const_width = source->has_const_width;
+  badge->advance_centering = source->advance_centering;
   badge->align = source->align;
   badge->x_offset = source->x_offset;
   badge->y_offset = source->y_offset;
   badge->text_x_offset = source->text_x_offset;
   badge->text_y_offset = source->text_y_offset;
   badge->custom_width = source->custom_width;
+  badge->advance = source->advance;
   badge->anchor = source->anchor;
 
   font_set_family(&badge->font, string_copy(source->font.family), true);
@@ -385,11 +396,11 @@ static void badge_copy(struct badge* badge, struct badge* source) {
   image_copy(&badge->background.image, source->background.image.image_ref);
 }
 
-static void badge_calculate_bounds(struct badge* badge, CGRect parent) {
+void badge_calculate_bounds(struct badge* badge, CGRect parent) {
   if (!badge->drawing) return;
 
   uint32_t box_width = badge_get_box_width(badge);
-  uint32_t text_width = badge_get_text_width(badge);
+  CGFloat text_width = badge_get_text_width(badge);
   uint32_t box_height = badge->background.overrides_height
                         ? badge->background.bounds.size.height
                         : badge->bounds.size.height;
@@ -444,7 +455,17 @@ static void badge_calculate_bounds(struct badge* badge, CGRect parent) {
   box.origin.x += badge->x_offset;
   box.origin.y += badge->y_offset;
 
-  if (badge->align == POSITION_CENTER) {
+  if (badge->advance_centering) {
+    if (badge->align == POSITION_CENTER) {
+      badge->bounds.origin.x = box.origin.x
+                               + ((CGFloat)box_width - text_width) / 2.f;
+    } else if (badge->align == POSITION_RIGHT) {
+      badge->bounds.origin.x = box.origin.x
+                               + (CGFloat)box_width - text_width;
+    } else {
+      badge->bounds.origin.x = box.origin.x;
+    }
+  } else if (badge->align == POSITION_CENTER) {
     badge->bounds.origin.x = box.origin.x
                              + (CGFloat)((int)box_width - (int)text_width) / 2.f;
   } else if (badge->align == POSITION_RIGHT) {
@@ -468,7 +489,7 @@ static void badge_calculate_bounds(struct badge* badge, CGRect parent) {
                                 box.size.height);
 }
 
-static void badge_draw(struct badge* badge, CGContextRef context) {
+void badge_draw(struct badge* badge, CGContextRef context) {
   if (!badge->drawing) return;
   if (badge->font.font_changed)
     badge_set_string(badge, badge->string, true);
@@ -489,7 +510,7 @@ static void badge_draw(struct badge* badge, CGContextRef context) {
   CGContextRestoreGState(context);
 }
 
-static void badge_destroy(struct badge* badge) {
+void badge_destroy(struct badge* badge) {
   background_destroy(&badge->background);
   font_destroy(&badge->font);
 
@@ -498,7 +519,7 @@ static void badge_destroy(struct badge* badge) {
   badge_clear_pointers(badge);
 }
 
-static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
+void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
   char align[32] = { 0 };
   switch (badge->align) {
     case POSITION_LEFT:
@@ -553,7 +574,7 @@ static void badge_serialize(struct badge* badge, char* indent, FILE* rsp) {
   fprintf(rsp, "\n%s}", indent);
 }
 
-static bool badge_parse_sub_domain(struct badge* badge, FILE* rsp, struct token property, char* message) {
+bool badge_parse_sub_domain(struct badge* badge, FILE* rsp, struct token property, char* message) {
   bool needs_refresh = false;
   if (token_equals(property, PROPERTY_STRING)) {
     return badge_set_string(badge, token_to_string(get_token(&message)), false);
@@ -692,6 +713,7 @@ bool text_set_string(struct text* text, char* string, bool forced) {
 }
 
 void text_copy(struct text* text, struct text* source) {
+  text->advance_centering = source->advance_centering;
   font_set_family(&text->font, string_copy(source->font.family), true);
   font_set_style(&text->font, string_copy(source->font.style), true);
   font_set_size(&text->font, source->font.size);
@@ -708,6 +730,7 @@ void text_init(struct text* text) {
   text->drawing = true;
   text->highlight = false;
   text->has_const_width = false;
+  text->advance_centering = false;
   text->custom_width = 0;
   text->padding_left = 0;
   text->padding_right = 0;
@@ -717,6 +740,9 @@ void text_init(struct text* text) {
   text->align = POSITION_LEFT;
   text->scroll = 0.f;
   text->scroll_duration = 100;
+  text->width = 0.f;
+  text->advance = 0.f;
+  text->bounds = CGRectZero;
 
   shadow_init(&text->shadow);
   background_init(&text->background);
@@ -795,7 +821,12 @@ uint32_t text_get_length(struct text* text, bool override) {
     text_set_string(text, text->string, true);
   }
 
-  int len = text->width + text->padding_left + text->padding_right;
+  float width = text->advance_centering && text->max_chars == 0
+                ? text->advance
+                : text->width;
+  int len = (int)ceil_positive_float_to_uint32(width)
+            + text->padding_left
+            + text->padding_right;
   if ((!text->has_const_width || override)
       && text->background.enabled
       && text->background.image.enabled) {
@@ -823,20 +854,19 @@ void text_destroy(struct text* text) {
   text_clear_pointers(text);
 }
 
-void text_calculate_bounds(struct text* text, uint32_t x, uint32_t y) {
-  CGFloat x_pos = (CGFloat)x + text->x_offset;
-
-  if (text->align == POSITION_CENTER && text->has_const_width)
-    text->bounds.origin.x = x_pos + ((int)text->custom_width
+static void text_calculate_bounds_at(struct text* text, float x, float y) {
+  if (text->align == POSITION_CENTER && text->has_const_width) {
+    text->bounds.origin.x = x + text->x_offset + ((int)text->custom_width
                                  - (int)text_get_length(text, true)) / 2.f;
-  else if (text->align == POSITION_RIGHT && text->has_const_width)
-    text->bounds.origin.x = x_pos + (int)text->custom_width
+  } else if (text->align == POSITION_RIGHT && text->has_const_width) {
+    text->bounds.origin.x = x + text->x_offset + (int)text->custom_width
                             - (int)text_get_length(text, true);
-  else
-    text->bounds.origin.x = x_pos;
+  } else {
+    text->bounds.origin.x = x + text->x_offset;
+  }
 
-  text->bounds.origin.y = (CGFloat)y - ((text->line.ascent
-                                         - text->line.descent) / 2);
+  text->bounds.origin.y = y - ((text->line.ascent
+                                - text->line.descent) / 2);
 
   if (text->background.enabled) {
     uint32_t height = text->background.overrides_height
@@ -844,7 +874,7 @@ void text_calculate_bounds(struct text* text, uint32_t x, uint32_t y) {
                       : text->bounds.size.height;
 
     background_calculate_bounds(&text->background,
-                                x_pos,
+                                x + text->x_offset,
                                 y,
                                 text_get_length(text, false),
                                 height                       );
@@ -859,10 +889,20 @@ void text_calculate_bounds(struct text* text, uint32_t x, uint32_t y) {
     badge_parent = text->bounds;
     badge_parent.origin.x += text->padding_left;
     badge_parent.origin.y += text->y_offset - text->line.descent;
-    badge_parent.size.width = text->width;
+    badge_parent.size.width = text->advance_centering && text->max_chars == 0
+                              ? text->advance
+                              : text->width;
   }
 
   badge_calculate_bounds(&text->badge, badge_parent);
+}
+
+void text_calculate_bounds(struct text* text, uint32_t x, uint32_t y) {
+  text_calculate_bounds_at(text, x, y);
+}
+
+void text_calculate_bounds_f(struct text* text, float x, float y) {
+  text_calculate_bounds_at(text, x, y);
 }
 
 bool text_set_scroll(struct text* text, float scroll) {
