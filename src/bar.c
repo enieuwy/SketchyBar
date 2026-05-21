@@ -4,6 +4,7 @@
 #include "display.h"
 #include "misc/helpers.h"
 #include "window.h"
+#include "ring_layer.h"
 
 #define MAX_RENDER_THREADS 10
 static pthread_t g_render_threads[MAX_RENDER_THREADS];
@@ -195,6 +196,9 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
         || bar_item->update_mask & UPDATE_MOUSE_EXITED) {
       window_assign_mouse_tracking_area(window, window->frame);
     }
+    if (bar_item->has_ring)
+      ring_layer_update(&bar_item->ring, window, true);
+
 
     windows_freeze();
     if (threaded && g_used_threads < MAX_RENDER_THREADS) {
@@ -213,7 +217,7 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
                      context        );
     } else {
       CGContextClearRect(window->context, window->frame);
-      bar_item_draw(bar_item, window->context);
+      bar_item_draw(bar_item, window);
       CGContextFlush(window->context);
       window_flush(window);
     }

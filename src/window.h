@@ -10,6 +10,9 @@
 
 extern CFTypeRef g_transaction;
 
+struct layer_host;
+struct ring_layer_tree;
+
 struct window {
   struct window* parent;
   int order_mode;
@@ -22,6 +25,9 @@ struct window {
   CGRect frame;
   CGPoint origin;
   CGContextRef context;
+
+  struct layer_host* layer_host;
+  struct ring_layer_tree* ring_layer;
 };
 
 void window_init(struct window* window);

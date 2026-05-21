@@ -1,4 +1,5 @@
 #include "bar_item.h"
+#include "ring_layer.h"
 #include "bar_manager.h"
 #include "event.h"
 #include "volume.h"
@@ -843,14 +844,15 @@ void bar_item_clip_bar(struct bar_item* bar_item, int offset, struct bar* bar) {
 void* draw_item_proc(void* context) {
   struct { struct window* window; struct bar_item bar_item; }* info = context;
   CGContextClearRect(info->window->context, info->window->frame);
-  bar_item_draw(&info->bar_item, info->window->context);
+  bar_item_draw(&info->bar_item, info->window);
   CGContextFlush(info->window->context);
   window_flush(info->window);
   free(context);
   return NULL;
 }
 
-void bar_item_draw(struct bar_item* bar_item, CGContextRef context) {
+void bar_item_draw(struct bar_item* bar_item, struct window* window) {
+  CGContextRef context = window->context;
   background_draw(&bar_item->background, context);
   if (bar_item->type == BAR_COMPONENT_GROUP) return;
 
@@ -860,7 +862,8 @@ void bar_item_draw(struct bar_item* bar_item, CGContextRef context) {
   if (bar_item->has_alias) alias_draw(&bar_item->alias, context);
   if (bar_item->has_graph) graph_draw(&bar_item->graph, context);
   if (bar_item->has_slider) slider_draw(&bar_item->slider, context);
-  if (bar_item->has_ring) ring_draw(&bar_item->ring, context);
+  if (bar_item->has_ring && !ring_layer_window_has_tree(window))
+    ring_draw(&bar_item->ring, context);
 
   text_draw_badge(&bar_item->icon, context);
   text_draw_badge(&bar_item->label, context);
@@ -878,6 +881,7 @@ static void bar_item_clear_pointers(struct bar_item* bar_item) {
   bar_item->script = NULL;
   bar_item->click_script = NULL;
   bar_item->group = NULL;
+  bar_item->parent = NULL;
   bar_item->signal_args.env_vars.vars = NULL;
   bar_item->signal_args.env_vars.count = 0;
   bar_item->windows = NULL;

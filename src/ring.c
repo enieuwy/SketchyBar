@@ -1,4 +1,5 @@
 #include "ring.h"
+#include "ring_layer.h"
 #include "bar_manager.h"
 #include "animation.h"
 
@@ -137,6 +138,136 @@ static bool ring_set_marker_icon(struct ring* ring, char* icon) {
     changed = true;
   }
   return text_set_string(&ring->marker, icon, false) || changed;
+}
+
+static struct bar_item* ring_get_owner(struct ring* ring) {
+  for (int i = 0; i < g_bar_manager.bar_item_count; i++) {
+    struct bar_item* bar_item = g_bar_manager.bar_items[i];
+    if (&bar_item->ring == ring) return bar_item;
+  }
+
+  return NULL;
+}
+
+static bool ring_has_layer_windows(struct ring* ring) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (ring_layer_window_has_tree(window)) return true;
+  }
+
+  return false;
+}
+
+static bool ring_update_layer_windows(struct ring* ring) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_update(ring, window, true);
+  }
+
+  return updated;
+}
+
+static bool ring_set_layer_window_values(struct ring* ring, float value) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_set_value(ring, window, value);
+  }
+
+  return updated;
+}
+
+static bool ring_animate_layer_window_values(struct ring* ring, float value) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_animate_value(ring,
+                                        window,
+                                        value,
+                                        g_bar_manager.animator.duration,
+                                        g_bar_manager.animator.interp_function);
+  }
+
+  return updated;
+}
+
+static bool ring_update_layer_window_colors(struct ring* ring, bool track) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_set_color(ring, window, track);
+  }
+
+  return updated;
+}
+
+static bool ring_animate_layer_window_colors(struct ring* ring, bool track) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_animate_color(ring,
+                                        window,
+                                        track,
+                                        g_bar_manager.animator.duration,
+                                        g_bar_manager.animator.interp_function);
+  }
+
+  return updated;
+}
+
+static bool ring_update_layer_window_line_widths(struct ring* ring) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_set_line_width(ring, window);
+  }
+
+  return updated;
+}
+
+static bool ring_animate_layer_window_line_widths(struct ring* ring) {
+  struct bar_item* bar_item = ring_get_owner(ring);
+  if (!bar_item) return false;
+
+  bool updated = false;
+  for (int i = 0; i < bar_item->num_windows; i++) {
+    struct window* window = bar_item->windows[i];
+    if (!ring_layer_window_has_tree(window)) continue;
+    updated |= ring_layer_animate_line_width(ring,
+                                             window,
+                                             g_bar_manager.animator.duration,
+                                             g_bar_manager.animator.interp_function);
+  }
+
+  return updated;
 }
 
 void ring_init(struct ring* ring) {
@@ -343,37 +474,87 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
 
   if (token_equals(property, PROPERTY_VALUE)) {
     float value = ring_clamp_value(token_to_float(get_token(&message)));
-    ANIMATE_FLOAT(ring_set_value,
-                  ring,
-                  ring->value,
-                  value);
+    if (ring_has_layer_windows(ring)) {
+      bool changed = ring_set_value(ring, value);
+      if (changed) {
+        bool updated = g_bar_manager.animator.duration > 0
+                       ? ring_animate_layer_window_values(ring, value)
+                       : ring_set_layer_window_values(ring, value);
+        needs_refresh = !updated;
+      }
+    } else {
+      ANIMATE_FLOAT(ring_set_value,
+                    ring,
+                    ring->value,
+                    value);
+    }
   }
   else if (token_equals(property, PROPERTY_PERCENTAGE)) {
     float value = ring_clamp_value(token_to_float(get_token(&message)) / 100.f);
-    ANIMATE_FLOAT(ring_set_value,
-                  ring,
-                  ring->value,
-                  value);
+    if (ring_has_layer_windows(ring)) {
+      bool changed = ring_set_value(ring, value);
+      if (changed) {
+        bool updated = g_bar_manager.animator.duration > 0
+                       ? ring_animate_layer_window_values(ring, value)
+                       : ring_set_layer_window_values(ring, value);
+        needs_refresh = !updated;
+      }
+    } else {
+      ANIMATE_FLOAT(ring_set_value,
+                    ring,
+                    ring->value,
+                    value);
+    }
   }
   else if (token_equals(property, PROPERTY_COLOR)) {
     struct token token = get_token(&message);
-    ANIMATE_BYTES(ring_set_color,
-                  ring,
-                  ring->color.hex,
-                  token_to_uint32t(token));
+    uint32_t color = token_to_uint32t(token);
+    if (ring_has_layer_windows(ring)) {
+      bool changed = ring_set_color(ring, color);
+      if (changed) {
+        bool updated = g_bar_manager.animator.duration > 0
+                       ? ring_animate_layer_window_colors(ring, false)
+                       : ring_update_layer_window_colors(ring, false);
+        needs_refresh = !updated;
+      }
+    } else {
+      ANIMATE_BYTES(ring_set_color,
+                    ring,
+                    ring->color.hex,
+                    color);
+    }
   }
   else if (token_equals(property, PROPERTY_TRACK_COLOR)) {
     struct token token = get_token(&message);
-    ANIMATE_BYTES(ring_set_track_color,
-                  ring,
-                  ring->track_color.hex,
-                  token_to_uint32t(token));
+    uint32_t color = token_to_uint32t(token);
+    if (ring_has_layer_windows(ring)) {
+      bool changed = ring_set_track_color(ring, color);
+      if (changed) {
+        bool updated = g_bar_manager.animator.duration > 0
+                       ? ring_animate_layer_window_colors(ring, true)
+                       : ring_update_layer_window_colors(ring, true);
+        needs_refresh = !updated;
+      }
+    } else {
+      ANIMATE_BYTES(ring_set_track_color,
+                    ring,
+                    ring->track_color.hex,
+                    color);
+    }
   }
   else if (token_equals(property, PROPERTY_LINE_WIDTH)) {
     struct token token = get_token(&message);
     float line_width = token_to_float(token);
     if (line_width <= 0.f) {
       respond(rsp, "[!] Ring: Invalid line_width '%s'\n", token.text);
+    } else if (ring_has_layer_windows(ring)) {
+      bool changed = ring_set_line_width(ring, line_width);
+      if (changed) {
+        bool updated = g_bar_manager.animator.duration > 0
+                       ? ring_animate_layer_window_line_widths(ring)
+                       : ring_update_layer_window_line_widths(ring);
+        needs_refresh = !updated;
+      }
     } else {
       ANIMATE_FLOAT(ring_set_line_width,
                     ring,
@@ -386,6 +567,8 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
     int width = token_to_int(token);
     if (width <= 0) {
       respond(rsp, "[!] Ring: Invalid width '%s'\n", token.text);
+    } else if (ring_has_layer_windows(ring)) {
+      needs_refresh = ring_set_width(ring, width);
     } else {
       ANIMATE(ring_set_width,
               ring,
@@ -404,6 +587,8 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
     needs_refresh = ring_set_clockwise(ring,
                                        evaluate_boolean_state(get_token(&message),
                                                               ring->clockwise));
+    if (needs_refresh && ring_update_layer_windows(ring))
+      needs_refresh = false;
   }
   else if (token_equals(property, PROPERTY_CAP)) {
     struct token token = get_token(&message);
@@ -412,6 +597,8 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
       respond(rsp, "[!] Ring: Invalid cap '%s'\n", token.text);
     } else {
       needs_refresh = ring_set_cap(ring, cap);
+      if (needs_refresh && ring_update_layer_windows(ring))
+        needs_refresh = false;
     }
   }
   else if (token_equals(property, SUB_DOMAIN_MARKER)) {
