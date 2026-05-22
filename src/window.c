@@ -1,4 +1,5 @@
 #include "window.h"
+#include "ring_layer.h"
 #include "bar_manager.h"
 #include "misc/helpers.h"
 
@@ -16,10 +17,12 @@ void window_init(struct window* window) {
   window->needs_move = false;
   window->needs_resize = false;
   window->order_mode = W_ABOVE;
+  window->layer_host = NULL;
+  window->ring_layer = NULL;
 }
 
 static CFTypeRef window_create_region(struct window* window, CGRect frame) {
-  CFTypeRef frame_region;
+  CFTypeRef frame_region = NULL;
   CGSNewRegionWithRect(&frame, &frame_region);
   return frame_region;
 }
@@ -47,8 +50,8 @@ void window_create(struct window* window, CGRect frame) {
                                         64,
                                         &id,
                                         NULL                    );
-  CFRelease(empty_region);
-  CFRelease(frame_region);
+  if (empty_region) CFRelease(empty_region);
+  if (frame_region) CFRelease(frame_region);
 
   window->id = id;
 
@@ -99,6 +102,8 @@ void window_clear(struct window* window) {
   window->frame = CGRectNull;
   window->needs_move = false;
   window->needs_resize = false;
+  window->layer_host = NULL;
+  window->ring_layer = NULL;
 }
 
 void window_flush(struct window* window) {
@@ -155,6 +160,7 @@ void window_move(struct window* window, CGPoint point) {
     CFRelease(array);
     CFRelease(number);
   }
+  ring_layer_window_move(window);
 }
 
 bool window_apply_frame(struct window* window, bool forced) {
@@ -191,7 +197,9 @@ bool window_apply_frame(struct window* window, bool forced) {
       window_move(window, window->origin);
     }
 
-    CFRelease(frame_region);
+    if (frame_region) CFRelease(frame_region);
+    ring_layer_window_resize(window);
+
 
     window->needs_move = false;
     window->needs_resize = false;
@@ -222,7 +230,8 @@ void window_close(struct window* window) {
   windows_unfreeze();
 
   SLSOrderWindow(g_connection, window->id, 0, 0);
-  CGContextRelease(window->context);
+  ring_layer_window_destroy(window);
+  if (window->context) CGContextRelease(window->context);
   SLSReleaseWindow(g_connection, window->id);
 
   window_clear(window);

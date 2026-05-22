@@ -4,6 +4,7 @@
 #include "display.h"
 #include "misc/helpers.h"
 #include "window.h"
+#include "ring_layer.h"
 
 #define MAX_RENDER_THREADS 10
 static pthread_t g_render_threads[MAX_RENDER_THREADS];
@@ -195,6 +196,19 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
         || bar_item->update_mask & UPDATE_MOUSE_EXITED) {
       window_assign_mouse_tracking_area(window, window->frame);
     }
+    if (bar_item->has_ring) {
+      if (bar_item_ring_chrome_visible(bar_item)) {
+        // Item background/icon/label/badge draw into the underlying CGContext
+        // surface (surface 0). The CA-backed ring surface is ordered above it,
+        // so keeping a ring layer tree here would hide the user's chrome. Tear
+        // it down and let the legacy CG renderer draw the full item.
+        if (ring_layer_window_has_tree(window))
+          ring_layer_window_destroy(window);
+      } else {
+        ring_layer_update(&bar_item->ring, window, true);
+      }
+    }
+
 
     windows_freeze();
     if (threaded && g_used_threads < MAX_RENDER_THREADS) {
@@ -213,7 +227,7 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
                      context        );
     } else {
       CGContextClearRect(window->context, window->frame);
-      bar_item_draw(bar_item, window->context);
+      bar_item_draw(bar_item, window);
       CGContextFlush(window->context);
       window_flush(window);
     }
