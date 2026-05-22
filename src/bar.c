@@ -202,7 +202,8 @@ void bar_draw(struct bar* bar, bool forced, bool threaded) {
         // surface (surface 0). The CA-backed ring surface is ordered above it,
         // so keeping a ring layer tree here would hide the user's chrome. Tear
         // it down and let the legacy CG renderer draw the full item.
-        ring_layer_window_destroy(window);
+        if (ring_layer_window_has_tree(window))
+          ring_layer_window_destroy(window);
       } else {
         ring_layer_update(&bar_item->ring, window, true);
       }
