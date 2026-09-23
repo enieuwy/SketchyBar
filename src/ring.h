@@ -16,6 +16,8 @@ struct ring {
   float start_angle;
   char cap;
   char marker_position;
+  bool spin;
+  float spin_duration;
   CGRect bounds;
   struct color color;
   struct color track_color;

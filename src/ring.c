@@ -2,6 +2,7 @@
 #include "bar_manager.h"
 #include "animation.h"
 
+#include <time.h>
 #include <math.h>
 
 #define RING_CAP_BUTT   'b'
@@ -130,6 +131,30 @@ static bool ring_set_track_color(struct ring* ring, uint32_t color) {
   return color_set_hex(&ring->track_color, color);
 }
 
+static bool ring_set_spin(struct ring* ring, bool spin) {
+  if (ring->spin == spin) return false;
+  ring->spin = spin;
+  return true;
+}
+
+static bool ring_set_spin_duration(struct ring* ring, float duration) {
+  if (duration <= 0.f) return false;
+  if (ring->spin_duration == duration) return false;
+  ring->spin_duration = duration;
+  return true;
+}
+
+static float ring_spin_start_angle(struct ring* ring) {
+  if (!ring->spin || ring->spin_duration <= 0.f) return ring->start_angle;
+
+  uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX);
+  double seconds = (double)now / 1000000000.0;
+  double phase = fmod(seconds, (double)ring->spin_duration)
+               / (double)ring->spin_duration;
+  float offset = (float)(phase * 360.0);
+  return ring->start_angle + (ring->clockwise ? offset : -offset);
+}
+
 static bool ring_set_marker_icon(struct ring* ring, char* icon) {
   bool changed = false;
   if (!ring->marker.drawing) {
@@ -148,6 +173,8 @@ void ring_init(struct ring* ring) {
   ring->start_angle = 270.f;
   ring->cap = RING_CAP_ROUND;
   ring->marker_position = RING_MARKER_POSITION_START;
+  ring->spin = false;
+  ring->spin_duration = 60.f;
   ring->bounds = (CGRect){{0, 0}, {0, 0}};
 
   color_init(&ring->color, 0xffffffff);
@@ -209,7 +236,7 @@ void ring_calculate_bounds(struct ring* ring, uint32_t x, uint32_t y) {
   if (ring->marker_position == RING_MARKER_POSITION_CENTER) {
     marker_center = center;
   } else {
-    float angle = -ring->start_angle * deg_to_rad;
+    float angle = -ring_spin_start_angle(ring) * deg_to_rad;
     marker_center = CGPointMake(center.x + cosf(angle) * radius,
                                 center.y + sinf(angle) * radius);
   }
@@ -247,7 +274,7 @@ void ring_draw(struct ring* ring, CGContextRef context) {
   CGPoint center = CGPointMake(ring->bounds.origin.x + ring->bounds.size.width / 2.f,
                                ring->bounds.origin.y + ring->bounds.size.height / 2.f);
 
-  float start = -ring->start_angle * deg_to_rad;
+  float start = -ring_spin_start_angle(ring) * deg_to_rad;
   bool cg_clockwise = ring->clockwise;
 
   CGContextSaveGState(context);
@@ -293,7 +320,9 @@ void ring_serialize(struct ring* ring, char* indent, FILE* rsp) {
                "%s\"start_angle\": \"%f\",\n"
                "%s\"clockwise\": \"%s\",\n"
                "%s\"cap\": \"%s\",\n"
-               "%s\"marker_position\": \"%s\",\n",
+               "%s\"marker_position\": \"%s\",\n"
+               "%s\"spin\": \"%s\",\n"
+               "%s\"spin_duration\": \"%f\",\n",
                indent, ring->value,
                indent, ring->value * 100.f,
                indent, ring->color.hex,
@@ -303,7 +332,9 @@ void ring_serialize(struct ring* ring, char* indent, FILE* rsp) {
                indent, ring->start_angle,
                indent, ring_bool_string(ring->clockwise),
                indent, ring_cap_string(ring->cap),
-               indent, ring_marker_position_string(ring->marker_position));
+               indent, ring_marker_position_string(ring->marker_position),
+               indent, ring_bool_string(ring->spin),
+               indent, ring->spin_duration);
 
   char deeper_indent[strlen(indent) + 2];
   snprintf(deeper_indent, strlen(indent) + 2, "%s\t", indent);
@@ -383,6 +414,20 @@ bool ring_parse_sub_domain(struct ring* ring, FILE* rsp, struct token property, 
                   ring,
                   ring->start_angle,
                   token_to_float(token));
+  }
+  else if (token_equals(property, "spin_duration")) {
+    struct token token = get_token(&message);
+    float duration = token_to_float(token);
+    if (duration <= 0.f) {
+      respond(rsp, "[!] Ring: Invalid spin_duration '%s'\n", token.text);
+    } else {
+      needs_refresh = ring_set_spin_duration(ring, duration);
+    }
+  }
+  else if (token_equals(property, "spin")) {
+    needs_refresh = ring_set_spin(ring,
+                                  evaluate_boolean_state(get_token(&message),
+                                                         ring->spin));
   }
   else if (token_equals(property, PROPERTY_CLOCKWISE)) {
     needs_refresh = ring_set_clockwise(ring,
